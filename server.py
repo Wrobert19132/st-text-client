@@ -20,6 +20,7 @@ class UserHandler:
 
     def make_group(self, name):
         self.groups[self.lowest_group_id] = (ChatRoom(name, self))
+        self.lowest_group_id += 1
 
     def get_group(self, id):
         return self.groups[id]
@@ -53,7 +54,9 @@ class UserHandler:
 
 class ChatRoom:
     def __init__(self, name, main):
+
         self.main = main
+        self.id = main.lowest_group_id
 
         self.name = name
         self.messages = []
@@ -70,7 +73,7 @@ class ChatRoom:
         for member in self.get_members():
             client = self.main.get_client(member)
             if client:
-                client.event(["message", message])
+                client.event(["message", self.id, message])
 
     def get_messages(self):
         return self.messages
@@ -136,7 +139,15 @@ class ClientConnection(threading.Thread):
                     if data[1] == "author":
                         self.sock.send(self.main.get_user(data[2]))
                     elif data[1] == "group":
-                        self.sock.send(self.main.get_group(data[2]))
+                        g = self.main.get_group(data[2])
+
+                        self.sock.send({"name": g.name})
+                elif data[0] == "count":
+                    if data[1] == "author":
+                        self.sock.send(len(self.main.users.keys()))
+
+                    elif data[1] == "group":
+                        self.sock.send(len(self.main.groups.keys()))
 
                 elif data[0] == "send":
                     self.main.get_group(data[1]).create_message(self.id, data[2])
