@@ -5,10 +5,11 @@ import os
 import datetime
 import msvcrt
 
-HOST = '86.131.115.243'  # The server's hostname or IP address
+HOST = '81.153.76.207'  # The server's hostname or IP address
 PORT = 65431  # The port used by the server
 
 USERNAME = ""
+CHATROOM = 0
 
 """
 Created By: Will
@@ -16,13 +17,11 @@ Created By: Will
 Info: 
 First try at messaging client, uses some sexy things like:
 
-Actually interesting:
 • Multi Threading
 • Sockets (Including my own Sock Handler for receiving and writing data)
 • client-server interaction
 • A ton of object oriented stuff
 
-Eh:
 • Me not using globals stupidly (Thx Alys)
 • Some constants that are actually useful and make sense
 
@@ -30,7 +29,7 @@ Eh:
 """
 
 
-# Manages reading data from Sock buffer. I'm proud of this
+# Manages reading data from Sock buffer
 class SockHandler:
     CAP = 1024  # Don't change this, buffer size
 
@@ -63,7 +62,7 @@ class SockHandler:
         return transmission
 
 
-# Manages you typing. You probably don't want to touch this either
+# Handles you pressing keys and sending messages when you press enter
 class MessageSender(threading.Thread):
     def __init__(self, receiver):
         super().__init__()
@@ -78,7 +77,8 @@ class MessageSender(threading.Thread):
 
     def handle_keys(self):
         try:
-            letter = msvcrt.getch().decode()  # Wait for a letter to be typed.
+            letter = msvcrt.getch().decode()  # Wait for a letter single letter to be typed.
+
         except UnicodeDecodeError:  # If the key is weird, pretend they typed nothing.
             letter = ""
 
@@ -119,11 +119,11 @@ class MessageReceiver(threading.Thread):
         # Caches - as to not kill my internet, stuff is only grabbed once from the server then stored locally here
 
         self.author_cache = {}  # All the members you've seen
-        self.message_cache = []  # The messages
+        self.message_cache = {}  # The messages
         self.group_cache = {}
 
         self.id = 0  # This will change pretty quickly.
-        self.group = 0
+        self.group = -1
 
         self.sock = SockHandler(self.establish_connection())
 
@@ -136,7 +136,7 @@ class MessageReceiver(threading.Thread):
         self.login()
 
         self.sock.send(["get", self.group])  # Download *all* the messages for a channel so far.
-        self.message_cache = self.sock.receive()
+        self.message_cache[self.group] = self.sock.receive()
 
         self.sender.start()
 
@@ -147,7 +147,7 @@ class MessageReceiver(threading.Thread):
     def login(self):
         os.system("CLS")
 
-        global USERNAME  # The only acceptable way to use globals in my opinion
+        global USERNAME
 
         if not USERNAME:
             USERNAME = input("Enter a username: ")
@@ -156,45 +156,53 @@ class MessageReceiver(threading.Thread):
 
         self.id = self.sock.receive()  # Pretty much discord user id's
 
+        print("Login successful!\n")
+
+        self.sock.send(["count", "group"])
+        count = self.sock.receive()
+
+        print("Available groups:")
+        for i in range(count):
+            g = self.get_group(i)
+            print(str(i) + ") " + g["name"])
+
+        valid = False
+        while not valid:
+            inp = input("\nEnter the number of the group to join: ")
+            if inp.isnumeric():
+                inp = int(inp)
+                if inp >= 0:
+                    if inp < count:
+                        valid = True
+                    else:
+                        print("That number is too high!")
+                else:
+                    print("That number is too low!")
+            else:
+                print("That's... not a number?")
+
+        self.group = inp
+
         self.sock.send(["join", self.group])  # "join" a room if your not already a member in it
 
     def get_author(self, author_id):
-        if not author_id in self.author_cache.keys():  # If the author info isn't saved locally in our cache yet
+        if author_id not in self.author_cache.keys():  # If the author info isn't saved locally in our cache yet
             self.sock.send(["info", "author", author_id])
             self.author_cache[author_id] = self.sock.receive()  # Save's the author info locally
         return self.author_cache[author_id]
 
     def get_group(self, group_id):
-        if not group_id in self.author_cache.keys():  # If the group info isn't saved locally yet
+        if group_id not in self.group_cache.keys():  # If the group info isn't saved locally yet
             self.sock.send(["info", "group", group_id])
-            self.author_cache[group_id] = self.sock.receive()  # Save's the group info locally
-        return self.author_cache[group_id]
+            self.group_cache[group_id] = self.sock.receive()  # Save's the group info locally
+        return self.group_cache[group_id]
 
     def draw_ui(self):
         os.system("CLS")  # Clears the screen
 
-        print("SPLEEN TEAM TEXT CLIENT - ALPHA BUILD\n")
+        print(self.get_group(self.group)["name"])  # prints the name of the group your in
 
-        """
-        If you plan on modding this (I don't know WHY you would, but...), it'd probably be nice to know what a message
-        looks like. Here's the data structure for a message and for an author.
-        
-        Message:
-        {"content": string, what the message says,
-         "author": integer, the authors ID. To get author data struct, use self.get_author(and this number)
-         }
-         
-         Author:
-         {"name": string, their name,
-          "alive": True, for if the connection is alive.
-          "id": The authors ID
-          "time": Timetuple of current time.
-          }
-
-          Yeah, I know these are basic as fuck, if you want anything added tell me! 
-          """
-
-        for message in self.message_cache[-20:]:  # Write the last 15 messages to the screen
+        for message in self.message_cache[self.group][-20:]:  # Write the last 15 messages to the screen
             author_name = self.get_author(message["author"])["name"]
             message_content = message["content"]
             time = datetime.datetime(*message["time"])
@@ -211,11 +219,12 @@ class MessageReceiver(threading.Thread):
         data = self.sock.receive()  # Wait for the server to send us something
 
         if data[0] == "message":  # If that something is a message.....
-            self.new_message(data[1])
+            self.new_message(data[1], data[2])
 
-    def new_message(self, message):  # Called when a message is sent
-        self.message_cache.append(message)
-
+    def new_message(self, group_id, message):  # Called when a message is sent
+        l = self.message_cache.get(group_id, [])
+        l.append(message)
+        self.message_cache[group_id] = l
         # TODO: Alert object?
 
 
